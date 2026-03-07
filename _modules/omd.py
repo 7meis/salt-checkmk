@@ -13,6 +13,7 @@ import salt.exceptions
 import subprocess
 import logging
 import os
+from datetime import datetime
 from salt.exceptions import SaltException
 
 
@@ -138,9 +139,15 @@ def versions():
         versions.append(line.split()[0])
     return versions
 
-def update_site(name, version=None, conflict='install'):
+def update_site(name, version=None, conflict='install', logfile=None):
     '''
     Update SITE to the current default version of OMD or to the defined explicit defined VERSION
+
+    Args:
+        name: Name of the OMD site
+        version: Target version (optional, defaults to current default version)
+        conflict: Conflict resolution strategy (default: 'install')
+        logfile: Path to logfile for update output (optional, defaults to /omd/sites/<sitename>/var/log/omd_update.log)
     '''
 
     # if site not exits, abort update
@@ -154,8 +161,8 @@ def update_site(name, version=None, conflict='install'):
         args.extend(['-V', version])
     else:
         #default version
-        target_version = def_version()  
-    
+        target_version = def_version()
+
     if site_version(name) == target_version:
         return 'Site {} already at the defined version {}'.format(name,target_version)
 
@@ -164,9 +171,65 @@ def update_site(name, version=None, conflict='install'):
 
     site_stop(name)
     logging.debug(args)
-    output = _exec_fetch(args)
-    site_start(name)
-    return output
+
+    # Write output to logfile
+    if logfile is None:
+        logfile = '/omd/sites/{}/var/log/omd_update.log'.format(name)
+
+    try:
+        # Execute update and capture both stdout and stderr
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = p.communicate()
+        retcode = p.returncode
+
+        stdout_decoded = stdout.decode('utf-8', errors='replace')
+        stderr_decoded = stderr.decode('utf-8', errors='replace')
+
+        # Ensure log directory exists
+        log_dir = os.path.dirname(logfile)
+        if not os.path.exists(log_dir):
+            try:
+                os.makedirs(log_dir, mode=0o755)
+            except OSError as e:
+                logging.warning('Could not create log directory {}: {}'.format(log_dir, e))
+
+        # Write log with timestamp
+        try:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            with open(logfile, 'a') as f:
+                f.write('\n' + '='*80 + '\n')
+                f.write('OMD Update Log - {}\n'.format(timestamp))
+                f.write('Site: {}\n'.format(name))
+                f.write('Target Version: {}\n'.format(target_version))
+                f.write('Command: {}\n'.format(' '.join(args)))
+                f.write('Exit Code: {}\n'.format(retcode))
+                f.write('='*80 + '\n')
+                if stdout_decoded:
+                    f.write('STDOUT:\n')
+                    f.write(stdout_decoded)
+                    f.write('\n')
+                if stderr_decoded:
+                    f.write('STDERR:\n')
+                    f.write(stderr_decoded)
+                    f.write('\n')
+            logging.info('Update output logged to: {}'.format(logfile))
+        except IOError as e:
+            logging.warning('Could not write to logfile {}: {}'.format(logfile, e))
+
+        if retcode:
+            details = stderr_decoded.strip() or stdout_decoded.strip() or 'No command output captured.'
+            raise salt.exceptions.CommandExecutionError(
+                "Command '{cmd}' returned: {ret}. Details: {details}. Logfile: {logfile}".format(
+                    cmd=" ".join(args),
+                    ret=retcode,
+                    details=details,
+                    logfile=logfile,
+                )
+            )
+
+        return stdout_decoded
+    finally:
+        site_start(name)
 
 def create_site(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_size=None):
     '''
