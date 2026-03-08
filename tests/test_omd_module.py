@@ -64,24 +64,71 @@ class TestOmdExecutionModule(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tempdir:
             logfile = Path(tempdir) / 'omd_update.log'
-            with patch.object(module, '_check_site_exists'), patch.object(module, 'site_version', return_value='1.0'), patch.object(module, 'site_running', return_value=True), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_fetch_tty', return_value=('\x1b[32mok\x1b[0m\n', 0)):
+            command_result = {
+                'stdout': '\x1b[32mok\x1b[0m\n',
+                'stderr': '',
+                'output': '\x1b[32mok\x1b[0m\n',
+                'retcode': 0,
+            }
+            with patch.object(module, '_check_site_exists'), patch.object(module, 'site_version', return_value='1.0'), patch.object(module, 'site_running', return_value=True), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_command', return_value=command_result) as exec_command:
                 result = module.update_site('mysite', version='2.0', logfile=str(logfile))
 
             content = logfile.read_text()
 
         self.assertEqual(result, 'ok\n')
+        exec_command.assert_called_once_with(
+            ['/usr/bin/omd', '--force', '-V', '2.0', 'update', '--conflict', 'install', 'mysite'],
+            ignore_errors=True,
+            use_tty=True,
+        )
         site_stop.assert_called_once_with('mysite')
         site_start.assert_called_once_with('mysite')
-        self.assertIn('Exit Code: 0', content)
-        self.assertIn('Details: ok', content)
+        self.assertIn('retcode: 0', content)
+        self.assertIn('details: ok', content)
+        self.assertIn('preserve_colors: true', content)
         self.assertIn('\x1b[32mok\x1b[0m', content)
+
+    def test_update_site_can_disable_color_preservation_in_log(self):
+        module = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            logfile = Path(tempdir) / 'omd_update.log'
+            command_result = {
+                'stdout': '\x1b[32mok\x1b[0m\n',
+                'stderr': '',
+                'output': '\x1b[32mok\x1b[0m\n',
+                'retcode': 0,
+            }
+            with patch.object(module, '_check_site_exists'), patch.object(module, 'site_version', return_value='1.0'), patch.object(module, 'site_running', return_value=False), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_command', return_value=command_result) as exec_command:
+                result = module.update_site('mysite', version='2.0', logfile=str(logfile), preserve_colors=False)
+
+            content = logfile.read_text()
+
+        self.assertEqual(result, 'ok\n')
+        exec_command.assert_called_once_with(
+            ['/usr/bin/omd', '--force', '-V', '2.0', 'update', '--conflict', 'install', 'mysite'],
+            ignore_errors=True,
+            use_tty=False,
+        )
+        site_stop.assert_not_called()
+        site_start.assert_not_called()
+        self.assertIn('preserve_colors: false', content)
+        self.assertIn('details: ok', content)
+        self.assertNotIn('\x1b[32mok\x1b[0m', content)
+        self.assertIn('output:\nok', content)
 
     def test_update_site_raises_and_preserves_stopped_state_on_failure(self):
         module = self.load_module()
 
         with tempfile.TemporaryDirectory() as tempdir:
             logfile = Path(tempdir) / 'omd_update.log'
-            with patch.object(module, '_check_site_exists'), patch.object(module, 'site_version', return_value='1.0'), patch.object(module, 'site_running', return_value=False), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_fetch_tty', return_value=('failure output\n', 1)):
+            command_result = {
+                'stdout': 'failure output\n',
+                'stderr': '',
+                'output': 'failure output\n',
+                'retcode': 1,
+            }
+            with patch.object(module, '_check_site_exists'), patch.object(module, 'site_version', return_value='1.0'), patch.object(module, 'site_running', return_value=False), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_command', return_value=command_result):
                 with self.assertRaises(module.salt.exceptions.CommandExecutionError) as error:
                     module.update_site('mysite', version='2.0', logfile=str(logfile))
 
@@ -92,8 +139,8 @@ class TestOmdExecutionModule(unittest.TestCase):
         self.assertIn('Logfile: {}'.format(logfile), message)
         site_stop.assert_not_called()
         site_start.assert_not_called()
-        self.assertIn('Exit Code: 1', content)
-        self.assertIn('Details: failure output', content)
+        self.assertIn('retcode: 1', content)
+        self.assertIn('details: failure output', content)
 
 
 if __name__ == '__main__':

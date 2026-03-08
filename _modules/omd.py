@@ -22,6 +22,7 @@ from salt.exceptions import SaltException
 
 __virtualname__ = 'omd'
 OMD_BIN = '/usr/bin/omd'
+LOGGER = logging.getLogger(__name__)
 
 
 def __virtual__():
@@ -46,6 +47,32 @@ def _strip_ansi(value):
     if not isinstance(value, str):
         return value
     return re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', value)
+
+
+def _format_log_value(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value)
+
+
+def _build_update_log_entry(site, target_version, args, retcode, details, output, preserve_colors):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    lines = [
+        '',
+        '=' * 80,
+        'timestamp: {}'.format(timestamp),
+        'site: {}'.format(site),
+        'target_version: {}'.format(target_version),
+        'command: {}'.format(' '.join(args)),
+        'retcode: {}'.format(retcode),
+        'preserve_colors: {}'.format(_format_log_value(preserve_colors)),
+        'details: {}'.format(details),
+        '=' * 80,
+    ]
+    if output:
+        lines.append('output:')
+        lines.append(output.rstrip('\n'))
+    return '\n'.join(lines) + '\n'
 
 
 def _raise_command_error(args, retcode, stdout='', stderr=''):
@@ -249,7 +276,7 @@ def versions():
         versions.append(line.split()[0])
     return versions
 
-def update_site(name, version=None, conflict='install', logfile=None):
+def update_site(name, version=None, conflict='install', logfile=None, preserve_colors=True):
     '''
     Update SITE to the current default version of OMD or to the defined explicit defined VERSION
 
@@ -258,6 +285,7 @@ def update_site(name, version=None, conflict='install', logfile=None):
         version: Target version (optional, defaults to current default version)
         conflict: Conflict resolution strategy (default: 'install')
         logfile: Path to logfile for update output (optional, defaults to /omd/sites/<sitename>/var/log/omd_update.log)
+        preserve_colors: Preserve ANSI colors in logged command output (default: True)
     '''
 
     # if site not exits, abort update
@@ -280,7 +308,13 @@ def update_site(name, version=None, conflict='install', logfile=None):
     args.extend(['update', '--conflict', conflict])
     args.append(name)
 
-    logging.debug(args)
+    LOGGER.debug(
+        'Starting OMD update for site=%s target_version=%s preserve_colors=%s command=%s',
+        name,
+        target_version,
+        preserve_colors,
+        ' '.join(args),
+    )
 
     # Write output to logfile
     if logfile is None:
@@ -290,9 +324,11 @@ def update_site(name, version=None, conflict='install', logfile=None):
         site_stop(name)
 
     try:
-        # Execute update via pseudo terminal to preserve colored output in logs
-        output_decoded, retcode = _exec_fetch_tty(args, ignore_errors=True)
+        result = _exec_command(args, ignore_errors=True, use_tty=preserve_colors)
+        output_decoded = result['output']
+        retcode = result['retcode']
         details = _strip_ansi(output_decoded).strip() or 'No command output captured.'
+        logged_output = output_decoded if preserve_colors else _strip_ansi(output_decoded)
 
         # Ensure log directory exists
         log_dir = os.path.dirname(logfile)
@@ -300,27 +336,20 @@ def update_site(name, version=None, conflict='install', logfile=None):
             try:
                 os.makedirs(log_dir, mode=0o755)
             except OSError as e:
-                logging.warning('Could not create log directory {}: {}'.format(log_dir, e))
+                LOGGER.warning('Could not create update log directory %s for site=%s: %s', log_dir, name, e)
 
-        # Write log with timestamp
         try:
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             with open(logfile, 'a') as f:
-                f.write('\n' + '='*80 + '\n')
-                f.write('OMD Update Log - {}\n'.format(timestamp))
-                f.write('Site: {}\n'.format(name))
-                f.write('Target Version: {}\n'.format(target_version))
-                f.write('Command: {}\n'.format(' '.join(args)))
-                f.write('Exit Code: {}\n'.format(retcode))
-                f.write('Details: {}\n'.format(details))
-                f.write('='*80 + '\n')
-                if output_decoded:
-                    f.write('OUTPUT:\n')
-                    f.write(output_decoded)
-                    f.write('\n')
-            logging.info('Update output logged to: {}'.format(logfile))
+                f.write(_build_update_log_entry(name, target_version, args, retcode, details, logged_output, preserve_colors))
+            LOGGER.info(
+                'OMD update output logged for site=%s target_version=%s retcode=%s logfile=%s',
+                name,
+                target_version,
+                retcode,
+                logfile,
+            )
         except IOError as e:
-            logging.warning('Could not write to logfile {}: {}'.format(logfile, e))
+            LOGGER.warning('Could not write update log for site=%s logfile=%s: %s', name, logfile, e)
 
         if retcode:
             raise salt.exceptions.CommandExecutionError(
@@ -361,7 +390,7 @@ def create_site(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_si
             args.extend(['-t', tmpfs_size])
 
     args.append(name)
-    logging.debug(args)
+    LOGGER.debug(args)
     return _exec_fetch(args)
 
 def remove_site(name):
@@ -427,7 +456,7 @@ def config_show(name):
         if not line:
             continue
         if ': ' not in line:
-            logging.warning("Ignoring unexpected output line from 'omd config %s show': %r", name, line)
+            LOGGER.warning("Ignoring unexpected output line from 'omd config %s show': %r", name, line)
             continue
         k, v = line.split(': ', 1)
         ret[k] = omd_bool_decode(v.strip())
