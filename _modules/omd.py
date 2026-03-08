@@ -10,9 +10,12 @@ Open Monitoring Distribution (OMD) Management Module
 '''
 
 import salt.exceptions
+import errno
 import subprocess
 import logging
 import os
+import pty
+import re
 from datetime import datetime
 from salt.exceptions import SaltException
 
@@ -46,6 +49,52 @@ def _exec_fetch(args, ignore_errors=False):
         if retcode:
             raise salt.exceptions.CommandExecutionError("Command '{cmd}' returned: {ret}".format(cmd=" ".join(args),ret=retcode))
     return output.decode('utf-8')
+
+
+def _strip_ansi(value):
+    if not isinstance(value, str):
+        return value
+    return re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', value)
+
+
+def _exec_fetch_tty(args):
+    if isinstance(args, str):
+        args = args.split()
+
+    env = os.environ.copy()
+    env.setdefault('TERM', 'xterm-256color')
+    master_fd, slave_fd = pty.openpty()
+    output_chunks = []
+
+    try:
+        p = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=env,
+        )
+        os.close(slave_fd)
+        slave_fd = None
+
+        while True:
+            try:
+                chunk = os.read(master_fd, 4096)
+                if not chunk:
+                    break
+                output_chunks.append(chunk)
+            except OSError as e:
+                if e.errno == errno.EIO:
+                    break
+                raise
+
+        retcode = p.wait()
+    finally:
+        os.close(master_fd)
+        if slave_fd is not None:
+            os.close(slave_fd)
+
+    return b''.join(output_chunks).decode('utf-8', errors='replace'), retcode
 
 
 def omd_bool_encode(value):
@@ -177,13 +226,9 @@ def update_site(name, version=None, conflict='install', logfile=None):
         logfile = '/omd/sites/{}/var/log/omd_update.log'.format(name)
 
     try:
-        # Execute update and capture both stdout and stderr
-        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = p.communicate()
-        retcode = p.returncode
-
-        stdout_decoded = stdout.decode('utf-8', errors='replace')
-        stderr_decoded = stderr.decode('utf-8', errors='replace')
+        # Execute update via pseudo terminal to preserve colored output in logs
+        output_decoded, retcode = _exec_fetch_tty(args)
+        details = _strip_ansi(output_decoded).strip() or 'No command output captured.'
 
         # Ensure log directory exists
         log_dir = os.path.dirname(logfile)
@@ -203,21 +248,17 @@ def update_site(name, version=None, conflict='install', logfile=None):
                 f.write('Target Version: {}\n'.format(target_version))
                 f.write('Command: {}\n'.format(' '.join(args)))
                 f.write('Exit Code: {}\n'.format(retcode))
+                f.write('Details: {}\n'.format(details))
                 f.write('='*80 + '\n')
-                if stdout_decoded:
-                    f.write('STDOUT:\n')
-                    f.write(stdout_decoded)
-                    f.write('\n')
-                if stderr_decoded:
-                    f.write('STDERR:\n')
-                    f.write(stderr_decoded)
+                if output_decoded:
+                    f.write('OUTPUT:\n')
+                    f.write(output_decoded)
                     f.write('\n')
             logging.info('Update output logged to: {}'.format(logfile))
         except IOError as e:
             logging.warning('Could not write to logfile {}: {}'.format(logfile, e))
 
         if retcode:
-            details = stderr_decoded.strip() or stdout_decoded.strip() or 'No command output captured.'
             raise salt.exceptions.CommandExecutionError(
                 "Command '{cmd}' returned: {ret}. Details: {details}. Logfile: {logfile}".format(
                     cmd=" ".join(args),
@@ -227,7 +268,7 @@ def update_site(name, version=None, conflict='install', logfile=None):
                 )
             )
 
-        return stdout_decoded
+        return _strip_ansi(output_decoded)
     finally:
         site_start(name)
 
