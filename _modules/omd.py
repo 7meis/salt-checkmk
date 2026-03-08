@@ -20,6 +20,18 @@ from datetime import datetime
 from salt.exceptions import SaltException
 
 
+__virtualname__ = 'omd'
+OMD_BIN = '/usr/bin/omd'
+
+
+def __virtual__():
+    if not os.path.isfile(OMD_BIN):
+        return (False, 'The omd execution module cannot be loaded: {} is missing.'.format(OMD_BIN))
+    if not os.access(OMD_BIN, os.X_OK):
+        return (False, 'The omd execution module cannot be loaded: {} is not executable.'.format(OMD_BIN))
+    return __virtualname__
+
+
 def _check_site_config_value_exists(name, key):
     # This config keys won't be listed by omd config show
     # e.g. LIVESTATUS_TCP_PORT will be only displayed if LIVESTATUS_TCP is set
