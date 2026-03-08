@@ -201,8 +201,6 @@ def update_site(name, version=None, conflict='install', logfile=None):
 
     # if site not exits, abort update
     _check_site_exists(name)
-
-    site_stop(name)
     args = ['/usr/bin/omd', '--force']
 
     if version:
@@ -212,18 +210,23 @@ def update_site(name, version=None, conflict='install', logfile=None):
         #default version
         target_version = def_version()
 
-    if site_version(name) == target_version:
+    current_version = site_version(name)
+    if current_version == target_version:
         return 'Site {} already at the defined version {}'.format(name,target_version)
+
+    was_running = site_running(name)
 
     args.extend(['update', '--conflict', conflict])
     args.append(name)
 
-    site_stop(name)
     logging.debug(args)
 
     # Write output to logfile
     if logfile is None:
         logfile = '/omd/sites/{}/var/log/omd_update.log'.format(name)
+
+    if was_running:
+        site_stop(name)
 
     try:
         # Execute update via pseudo terminal to preserve colored output in logs
@@ -270,7 +273,8 @@ def update_site(name, version=None, conflict='install', logfile=None):
 
         return _strip_ansi(output_decoded)
     finally:
-        site_start(name)
+        if was_running:
+            site_start(name)
 
 def create_site(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_size=None):
     '''
