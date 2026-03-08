@@ -364,7 +364,13 @@ def config_show(name):
     ret = {}
     output = _exec_fetch(['/usr/bin/omd', 'config', name, 'show'])
     for line in output.splitlines():
-        k, v = line.split(': ')
+        line = line.strip()
+        if not line:
+            continue
+        if ': ' not in line:
+            logging.warning("Ignoring unexpected output line from 'omd config %s show': %r", name, line)
+            continue
+        k, v = line.split(': ', 1)
         ret[k] = omd_bool_decode(v.strip())
     return ret
 
