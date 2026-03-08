@@ -42,34 +42,32 @@ def _check_site_config_value_exists(name, key):
     if not (key in NO_CHECK_CONFIG_VALUES or site_config_value_exists(name, key)):
         raise salt.exceptions.CommandExecutionError("Config value [{}] does not exist.".format(key))
 
-def _exec_nofetch(args):
-     
-    if isinstance(args, str):
-        args = args.split()
-    try:
-        subprocess.check_call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception as e:
-        raise salt.exceptions.CommandExecutionError(str(e))
-
-def _exec_fetch(args, ignore_errors=False):
-    if isinstance(args, str):
-        args = args.split()
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    output, err = p.communicate()
-    if not ignore_errors:
-        retcode = p.poll()
-        if retcode:
-            raise salt.exceptions.CommandExecutionError("Command '{cmd}' returned: {ret}".format(cmd=" ".join(args),ret=retcode))
-    return output.decode('utf-8')
-
-
 def _strip_ansi(value):
     if not isinstance(value, str):
         return value
     return re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', value)
 
 
-def _exec_fetch_tty(args):
+def _raise_command_error(args, retcode, stdout='', stderr=''):
+    stdout_clean = _strip_ansi(stdout).strip()
+    stderr_clean = _strip_ansi(stderr).strip()
+
+    message_parts = [
+        "Command '{cmd}' returned: {ret}".format(cmd=" ".join(args), ret=retcode)
+    ]
+
+    if stdout_clean:
+        message_parts.append("STDOUT: {}".format(stdout_clean))
+    if stderr_clean:
+        message_parts.append("STDERR: {}".format(stderr_clean))
+    if not stdout_clean and not stderr_clean:
+        message_parts.append('No command output captured.')
+
+    message = '. '.join(message_parts)
+    raise salt.exceptions.CommandExecutionError(message)
+
+
+def _exec_command_tty(args):
     if isinstance(args, str):
         args = args.split()
 
@@ -107,6 +105,57 @@ def _exec_fetch_tty(args):
             os.close(slave_fd)
 
     return b''.join(output_chunks).decode('utf-8', errors='replace'), retcode
+
+
+def _exec_command(args, ignore_errors=False, stdin_data=None, use_tty=False, combine_stderr=False):
+    if isinstance(args, str):
+        args = args.split()
+
+    if use_tty:
+        output, retcode = _exec_command_tty(args)
+        if retcode and not ignore_errors:
+            _raise_command_error(args, retcode, stdout=output)
+        return {
+            'stdout': output,
+            'stderr': '',
+            'output': output,
+            'retcode': retcode,
+        }
+
+    p = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if combine_stderr else subprocess.PIPE,
+    )
+    stdout, stderr = p.communicate(input=stdin_data)
+    retcode = p.returncode
+
+    stdout_decoded = stdout.decode('utf-8', errors='replace')
+    stderr_decoded = '' if combine_stderr else stderr.decode('utf-8', errors='replace')
+
+    if retcode and not ignore_errors:
+        _raise_command_error(args, retcode, stdout=stdout_decoded, stderr=stderr_decoded)
+
+    return {
+        'stdout': stdout_decoded,
+        'stderr': stderr_decoded,
+        'output': stdout_decoded,
+        'retcode': retcode,
+    }
+
+
+def _exec_nofetch(args):
+    _exec_command(args)
+
+
+def _exec_fetch(args, ignore_errors=False):
+    return _exec_command(args, ignore_errors=ignore_errors)['stdout']
+
+
+def _exec_fetch_tty(args, ignore_errors=False):
+    result = _exec_command(args, ignore_errors=ignore_errors, use_tty=True)
+    return result['output'], result['retcode']
 
 
 def omd_bool_encode(value):
@@ -242,7 +291,7 @@ def update_site(name, version=None, conflict='install', logfile=None):
 
     try:
         # Execute update via pseudo terminal to preserve colored output in logs
-        output_decoded, retcode = _exec_fetch_tty(args)
+        output_decoded, retcode = _exec_fetch_tty(args, ignore_errors=True)
         details = _strip_ansi(output_decoded).strip() or 'No command output captured.'
 
         # Ensure log directory exists
@@ -324,14 +373,8 @@ def remove_site(name):
         raise salt.exceptions.CommandExecutionError("Site [{}] does not exist.".format(name))
 
     args = ['/usr/bin/omd', 'rm', name]
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.STDOUT)
-    output, err = p.communicate(input=b'yes\n')
-    retcode = p.returncode
-
-    if not retcode == 0 or err:
-        raise salt.exceptions.CommandExecutionError("Command '{cmd}' Output: {output} Error: {err} Retcode: {ret}".format(cmd=" ".join(args), output=output, err=err, ret=retcode))
-    else:
-        return "Site [{}] successfully removed".format(name)
+    _exec_command(args, stdin_data=b'yes\n', combine_stderr=True)
+    return "Site [{}] successfully removed".format(name)
 
 def site_status(name):
     
