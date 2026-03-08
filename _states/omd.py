@@ -45,7 +45,7 @@ def site_absent(name):
     return ret
 
 
-def site_present(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_size=None, params={}):
+def site_present(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_size=None, params=None):
     '''
     Ensure OMD site is present with the specified parameters
 
@@ -65,6 +65,9 @@ def site_present(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_s
         Dictionary containing OMD configuration parameters
     '''
 
+    if params is None:
+        params = {}
+
     ret = {
         'name': name,
         'result': True,
@@ -82,7 +85,9 @@ def site_present(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_s
         dry_run = False
 
     # Check omd site already exists
-    if __salt__['omd.site_exists'](name):
+    site_available = __salt__['omd.site_exists'](name)
+
+    if site_available:
         comment = "OMD site {name} already exists".format(name=name)
 
         # Site exits!
@@ -104,16 +109,18 @@ def site_present(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_s
         actions.append("Create new Site")        
         if not dry_run:
             __salt__['omd.create_site'](name, version, admin_password, no_tmpfs, tmpfs_size)
+            site_available = True
 
 
     # Check OMD Sites has the correct config params
     change_params = { 'old' : {}, 'new' : {} }
 
     # Compare current OMD Site config values with defined params  
-    for key, val in params.items():
-         if not __salt__['omd.site_is_config_value'](name, key, val):
-            change_params['old'][key] = __salt__['omd.config_show_value'](name, key)
-            change_params['new'][key] = val
+    if site_available:
+        for key, val in params.items():
+             if not __salt__['omd.site_is_config_value'](name, key, val):
+                change_params['old'][key] = __salt__['omd.config_show_value'](name, key)
+                change_params['new'][key] = val
 
     # If there changes in pipeline (change_params)
     if len(change_params['new']) > 0:
