@@ -393,6 +393,70 @@ def create_site(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_si
     LOGGER.debug(args)
     return _exec_fetch(args)
 
+
+def copy_site(source_site, new_site, start_new_site=False):
+    '''
+    Copy an existing OMD site to a new site.
+
+    The copy process is:
+    1. stop the source site
+    2. copy the source site to the new site
+    3. start the source site again
+    4. start the new site if requested
+    '''
+
+    _check_site_exists(source_site)
+    if site_exists(new_site):
+        raise salt.exceptions.CommandExecutionError("Site [{}] already exists.".format(new_site))
+
+    args = [OMD_BIN, 'cp', source_site, new_site]
+    LOGGER.info(
+        'Copying OMD site source_site=%s new_site=%s command=%s',
+        source_site,
+        new_site,
+        ' '.join(args),
+    )
+
+    copy_output = ''
+    copy_error = None
+    restart_error = None
+    stop_new_error = None
+    copy_completed = False
+
+    site_stop(source_site)
+
+    try:
+        copy_output = _exec_fetch(args)
+        copy_completed = True
+    except salt.exceptions.CommandExecutionError as exc:
+        copy_error = exc
+    finally:
+        try:
+            site_start(source_site)
+        except salt.exceptions.CommandExecutionError as exc:
+            restart_error = exc
+
+    if copy_completed and start_new_site:
+        try:
+            site_start(new_site)
+        except salt.exceptions.CommandExecutionError as exc:
+            stop_new_error = exc
+
+    if copy_error or restart_error or stop_new_error:
+        errors = []
+        if copy_error:
+            errors.append('Copy site [{}] -> [{}] failed: {}'.format(source_site, new_site, copy_error))
+        if restart_error:
+            errors.append('Failed to restart source site [{}]: {}'.format(source_site, restart_error))
+        if stop_new_error:
+            errors.append('Failed to start copied site [{}]: {}'.format(new_site, stop_new_error))
+        raise salt.exceptions.CommandExecutionError(' '.join(errors))
+
+    copy_output = _strip_ansi(copy_output).strip()
+    if copy_output:
+        return copy_output
+    return 'Site [{}] successfully copied to [{}] and stopped'.format(source_site, new_site)
+
 def remove_site(name):
     '''
     Remove existing OMD site (and its data)

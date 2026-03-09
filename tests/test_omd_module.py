@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from tests.support import load_repo_module
 
@@ -141,6 +141,56 @@ class TestOmdExecutionModule(unittest.TestCase):
         site_start.assert_not_called()
         self.assertIn('retcode: 1', content)
         self.assertIn('details: failure output', content)
+
+    def test_copy_site_runs_requested_sequence(self):
+        module = self.load_module()
+        tracker = Mock()
+
+        with patch.object(module, '_check_site_exists') as check_site_exists, patch.object(module, 'site_exists', return_value=False) as site_exists, patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_fetch', return_value='copy done\n') as exec_fetch:
+            tracker.attach_mock(check_site_exists, 'check_site_exists')
+            tracker.attach_mock(site_exists, 'site_exists')
+            tracker.attach_mock(site_stop, 'site_stop')
+            tracker.attach_mock(exec_fetch, 'exec_fetch')
+            tracker.attach_mock(site_start, 'site_start')
+
+            result = module.copy_site('source', 'target')
+
+        self.assertEqual(result, 'copy done')
+        self.assertEqual(
+            tracker.mock_calls,
+            [
+                call.check_site_exists('source'),
+                call.site_exists('target'),
+                call.site_stop('source'),
+                call.exec_fetch(['/usr/bin/omd', 'cp', 'source', 'target']),
+                call.site_start('source'),
+                call.site_stop('target'),
+            ],
+        )
+
+    def test_copy_site_restarts_source_when_copy_fails(self):
+        module = self.load_module()
+        error = module.salt.exceptions.CommandExecutionError('copy failed')
+
+        with patch.object(module, '_check_site_exists'), patch.object(module, 'site_exists', return_value=False), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_fetch', side_effect=error):
+            with self.assertRaises(module.salt.exceptions.CommandExecutionError) as raised_error:
+                module.copy_site('source', 'target')
+
+        self.assertIn('Copy site [source] -> [target] failed: copy failed', str(raised_error.exception))
+        site_stop.assert_called_once_with('source')
+        site_start.assert_called_once_with('source')
+
+    def test_copy_site_rejects_existing_target(self):
+        module = self.load_module()
+
+        with patch.object(module, '_check_site_exists'), patch.object(module, 'site_exists', return_value=True), patch.object(module, 'site_stop') as site_stop, patch.object(module, 'site_start') as site_start, patch.object(module, '_exec_fetch') as exec_fetch:
+            with self.assertRaises(module.salt.exceptions.CommandExecutionError) as error:
+                module.copy_site('source', 'target')
+
+        self.assertIn('Site [target] already exists.', str(error.exception))
+        site_stop.assert_not_called()
+        site_start.assert_not_called()
+        exec_fetch.assert_not_called()
 
 
 if __name__ == '__main__':
