@@ -351,6 +351,11 @@ def update_site(name, version=None, conflict='install', logfile=None, preserve_c
         except IOError as e:
             LOGGER.warning('Could not write update log for site=%s logfile=%s: %s', name, logfile, e)
 
+        try:
+            package_cleanup()
+        except salt.exceptions.CommandExecutionError as exc:
+            LOGGER.warning('OMD package cleanup failed: %s', exc)
+
         if retcode:
             raise salt.exceptions.CommandExecutionError(
                 "Command '{cmd}' returned: {ret}. Details: {details}. Logfile: {logfile}".format(
@@ -360,7 +365,7 @@ def update_site(name, version=None, conflict='install', logfile=None, preserve_c
                     logfile=logfile,
                 )
             )
-
+        
         return _strip_ansi(output_decoded)
     finally:
         if was_running:
@@ -505,6 +510,13 @@ def site_stop(name):
     
     _exec_nofetch(['/usr/bin/omd', 'stop', name])
     return 'Site {} successfully stopped'.format(name)
+
+def package_cleanup():
+    '''
+    Cleanup old OMD packages that are no longer needed by any site
+    '''
+    _exec_nofetch(['/usr/bin/omd', 'cleanup'])
+    return 'OMD package cleanup completed'
 
 def config_show(name):
     '''
