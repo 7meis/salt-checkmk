@@ -269,8 +269,8 @@ def versions():
 
     versions = []
     output = _exec_fetch(['/usr/bin/omd', 'versions'])
-    # 1.5.0p16.cre 
-    # 1.6.0p8.cre (default)
+    # 2.4.0p16.cre 
+    # 2.3.0p8.cre (default)
     for line in output.splitlines():
         # honor only the first column
         versions.append(line.split()[0])
@@ -284,7 +284,7 @@ def update_site(name, version=None, conflict='install', logfile=None, preserve_c
         name: Name of the OMD site
         version: Target version (optional, defaults to current default version)
         conflict: Conflict resolution strategy (default: 'install')
-        logfile: Path to logfile for update output (optional, defaults to /omd/sites/<sitename>/var/log/omd_update.log)
+        logfile: Path to logfile for update output (optional, defaults to /omd/sites/<sitename>/var/log/omd_update_<timestamp>.log)
         preserve_colors: Preserve ANSI colors in logged command output (default: True)
     '''
 
