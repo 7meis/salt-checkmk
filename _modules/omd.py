@@ -276,7 +276,7 @@ def versions():
         versions.append(line.split()[0])
     return versions
 
-def update_site(name, version=None, conflict='install', logfile=None, preserve_colors=True):
+def update_site(name, version=None, conflict='install', logfile=None, preserve_colors=True, start_site_after_update=True):
     '''
     Update SITE to the current default version of OMD or to the defined explicit defined VERSION
 
@@ -286,6 +286,7 @@ def update_site(name, version=None, conflict='install', logfile=None, preserve_c
         conflict: Conflict resolution strategy (default: 'install')
         logfile: Path to logfile for update output (optional, defaults to /omd/sites/<sitename>/var/log/omd_update_<timestamp>.log)
         preserve_colors: Preserve ANSI colors in logged command output (default: True)
+        start_site_after_update: Start the site after update (default: True)
     '''
 
     # if site not exits, abort update
@@ -368,7 +369,7 @@ def update_site(name, version=None, conflict='install', logfile=None, preserve_c
         
         return _strip_ansi(output_decoded)
     finally:
-        if was_running:
+        if was_running or start_site_after_update:
             site_start(name)
 
 def create_site(name, version=None, admin_password=None, no_tmpfs=None, tmpfs_size=None):
