@@ -318,7 +318,7 @@ def update_site(name, version=None, conflict='install', logfile=None, preserve_c
 
     # Write output to logfile
     if logfile is None:
-        logfile = '/omd/sites/{}/var/log/omd_update.log'.format(name)
+        logfile = f'/omd/sites/{name}/var/log/omd_update_{datetime.now().strftime("%Y%m%d-%H%M%S")}.log'
 
     if was_running:
         site_stop(name)
